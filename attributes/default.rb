@@ -108,7 +108,7 @@ when "suse"
 
   postgresql_base = "postgresql"
   if node['platform_version'] == "11.2"
-    postgresql_base += node['postgresql']['version'].split('.').join
+    postgresql_base += default['postgresql']['version'].split('.').join
   end
 
   default['postgresql']['client']['packages'] =  ["#{postgresql_base}"]
