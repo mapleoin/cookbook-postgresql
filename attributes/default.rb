@@ -100,6 +100,7 @@ when "redhat", "centos", "scientific", "oracle"
 
   default['postgresql']['version'] = "8.4"
   default['postgresql']['dir'] = "/var/lib/pgsql/data"
+  default['postgresql']['sysconfig'] = "/etc/sysconfig/pgsql/postgresql"
 
   if node['platform_version'].to_f >= 6.0 && node['postgresql']['version'] == '8.4'
     default['postgresql']['client']['packages'] = %w{postgresql-devel}
@@ -121,16 +122,19 @@ when "redhat", "centos", "scientific", "oracle"
 
 when "suse"
 
-  if node['platform_version'].to_f <= 11.1
+  if node['platform_version'].to_f <= 11.2
     default['postgresql']['version'] = "8.3"
+    default['postgresql']['server']['packages'] = ['postgresql-server']
+    default['postgresql']['contrib']['packages'] = ['postgresql-contrib']
   else
-    default['postgresql']['version'] = "9.0"
+    default['postgresql']['version'] = "9.1"
+    default['postgresql']['server']['packages'] = ['postgresql91-server']
+    default['postgresql']['contrib']['packages'] = ['postgresql91-contrib']
   end
 
   default['postgresql']['dir'] = "/var/lib/pgsql/data"
-  default['postgresql']['client']['packages'] = %w{postgresql-devel}
-  default['postgresql']['server']['packages'] = %w{postgresql-server}
-  default['postgresql']['contrib']['packages'] = %w{postgresql-contrib}
+  default['postgresql']['sysconfig'] = "/etc/sysconfig/postgresql"
+  default['postgresql']['client']['packages'] = []
   default['postgresql']['server']['service_name'] = "postgresql"
 
 else

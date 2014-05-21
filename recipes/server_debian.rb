@@ -22,10 +22,16 @@
 include_recipe "postgresql::client"
 
 node['postgresql']['server']['packages'].each do |pg_pack|
-
   package pg_pack
-
 end
+
+# We need to include the HA recipe early, before the config files are
+# generated, but after the postgresql packages are installed since they live in
+# the directory that will be mounted for HA
+if node[:database][:ha][:enabled]
+  include_recipe "postgresql::ha_storage"
+end
+
 
 service "postgresql" do
   service_name node['postgresql']['server']['service_name']

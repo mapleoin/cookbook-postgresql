@@ -4,7 +4,9 @@
 #
 # Author:: Joshua Timberman (<joshua@opscode.com>)
 # Author:: Lamont Granquist (<lamont@opscode.com>)
+# Author:: Ralf Haferkamp (<rhafer@suse.com>)
 # Copyright 2009-2011, Opscode, Inc.
+# Copyright 2012, SUSE
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,6 +24,36 @@
 ::Chef::Recipe.send(:include, Opscode::OpenSSL::Password)
 
 include_recipe "postgresql::client"
+
+# For Crowbar, we need to set the address to bind - default to admin node.
+newaddr = CrowbarDatabaseHelper.get_listen_address(node)
+if node['postgresql']['config']['listen_addresses'] != newaddr
+  node['postgresql']['config']['listen_addresses'] = newaddr
+  node.save
+end
+
+# We also need to add the network + mask to give access to other nodes
+# in pg_hba.conf
+# XXX this assumes that crowbar is the only one changing pg_hba attributes
+if node['postgresql']['pg_hba'][4]
+  netaddr, netmask = node['postgresql']['pg_hba'][4][:addr].split
+else
+  node['postgresql']['pg_hba'][4] = {
+    :type => 'host',
+    :db => 'all',
+    :user => 'all',
+    :method => 'md5',
+  }
+  netaddr, netmaks = '', ''
+end
+
+newnetaddr = Chef::Recipe::Barclamp::Inventory.get_network_by_type(node, "admin").subnet
+newnetmask = Chef::Recipe::Barclamp::Inventory.get_network_by_type(node, "admin").netmask
+
+if netaddr != newnetaddr or netmask != newnetmask
+  node['postgresql']['pg_hba'][4][:addr] = [newnetaddr, newnetmask].join('    ')
+  node.save
+end
 
 # randomly generate postgres password, unless using solo - see README
 if Chef::Config[:solo]
@@ -47,6 +79,11 @@ else
   node.set_unless['postgresql']['password']['postgres'] = secure_password
   node.save
 end
+
+# While we would like to include the "postgresql::ha_storage" recipe from here,
+# it's not possible: we need to have the packages installed first, and we need
+# to include it before we do templates. Which means we need to do it in the
+# server_* recipe directly, since they do both.
 
 # Include the right "family" recipe for installing the server
 # since they do things slightly differently.
@@ -75,6 +112,20 @@ template "#{node['postgresql']['dir']}/pg_hba.conf" do
   notifies change_notify, 'service[postgresql]', :immediately
 end
 
+ha_enabled = node[:database][:ha][:enabled]
+
+if ha_enabled
+  log "HA support for postgresql is enabled"
+  include_recipe "postgresql::ha"
+
+  # Only run the psql commands if the service is running on this node, so that
+  # we don't depend on the node running the service to be as fast as this one
+  service_name = "postgresql"
+  only_if_command = "crm resource show #{service_name} | grep -q \" #{node.hostname} *$\""
+else
+  log "HA support for postgresql is disabled"
+end
+
 # NOTE: Consider two facts before modifying "assign-postgres-password":
 # (1) Passing the "ALTER ROLE ..." through the psql command only works
 #     if passwordless authorization was configured for local connections.
@@ -88,5 +139,26 @@ bash "assign-postgres-password" do
   code <<-EOH
 echo "ALTER ROLE postgres ENCRYPTED PASSWORD '#{node['postgresql']['password']['postgres']}';" | psql -p #{node['postgresql']['config']['port']}
   EOH
+  action :run
+end
+
+# For Crowbar we also need the "db_maker" user
+bash "assign-db_maker-password" do
+  user 'postgres'
+  code <<-EOH
+echo "CREATE ROLE db_maker WITH LOGIN CREATEDB CREATEROLE ENCRYPTED PASSWORD '#{node[:database][:db_maker_password]}';
+ALTER ROLE db_maker ENCRYPTED PASSWORD '#{node[:database][:db_maker_password]}';" | psql
+  EOH
+  not_if do
+    begin
+      require 'rubygems'
+      Gem.clear_paths
+      require 'pg'
+      conn = PGconn.connect(:host => newaddr, :port => 5432, :dbname => "postgres", :user => "db_maker", :password => node['database']['db_maker_password'])
+    rescue PGError
+      false
+    end
+  end
+  only_if only_if_command if ha_enabled
   action :run
 end
